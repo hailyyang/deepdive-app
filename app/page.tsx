@@ -7,7 +7,11 @@ import { ResultCard } from "@/components/result-card"
 import { PricingSection } from "@/components/pricing-section"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Search, Loader2 } from "lucide-react"
+import { Search, Loader2, Layers, Brain, Info } from "lucide-react"
+import { Card, CardContent } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import Link from "next/link"
+import { SignedIn, useUser } from "@clerk/nextjs"
 
 interface ExplanationData {
   explanation: string
@@ -23,9 +27,25 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<ExplanationData | null>(null)
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  const [upgradeModalType, setUpgradeModalType] = useState<'limit' | 'premium'>('limit')
+  
+  const { user } = useUser()
+  const ADMIN_ID = 'user_37GIjuBW1YNC0bLc2U3J3bdOq6z'
+  
+  // Check if user is admin or has pro subscription
+  // For now, assume all users are free except admin (can be updated when subscription system is added)
+  const isPro = user?.id === ADMIN_ID // || subscriptionStatus === 'active'
 
   const handleSearch = async () => {
     if (!concept.trim()) {
+      return
+    }
+
+    // Check if user is trying to search with premium level
+    if ((level === 2 || level === 3) && !isPro) {
+      setUpgradeModalType('premium')
+      setShowUpgradeModal(true)
       return
     }
 
@@ -47,6 +67,15 @@ export default function HomePage() {
 
       if (!response.ok) {
         const errorData = await response.json()
+        
+        // Check if it's a rate limit error
+        if (response.status === 429 && errorData.limitReached) {
+          setUpgradeModalType('limit')
+          setShowUpgradeModal(true)
+          setError(errorData.error || 'Daily limit reached')
+          return
+        }
+        
         throw new Error(errorData.error || 'Failed to get explanation')
       }
 
@@ -115,7 +144,15 @@ export default function HomePage() {
             </div>
 
             {/* Level Slider */}
-            <LevelSlider value={level} onChange={setLevel} />
+            <LevelSlider 
+              value={level} 
+              onChange={setLevel}
+              isPro={isPro}
+              onPremiumLevelClick={() => {
+                setUpgradeModalType('premium')
+                setShowUpgradeModal(true)
+              }}
+            />
           </div>
 
           {/* Result Display */}
@@ -132,12 +169,105 @@ export default function HomePage() {
             keyTerms={result?.key_terms || []}
             isVisible={hasSearched}
             isLoading={isLoading}
+            topic={concept}
+            level={level}
           />
+
+          {/* Study Features Info */}
+          <SignedIn>
+            {hasSearched && result && (
+              <Card className="border-primary/20 bg-primary/5">
+                <CardContent className="p-4">
+                  <div className="flex items-start gap-3">
+                    <Info className="h-5 w-5 shrink-0 text-primary mt-0.5" />
+                    <div className="flex-1 space-y-2">
+                      <p className="text-sm font-medium text-foreground">
+                        Study with your saved items
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Save this explanation to your library to access interactive study features:
+                      </p>
+                      <div className="flex flex-wrap gap-3 mt-3">
+                        <div className="flex items-center gap-2 text-sm">
+                          <Layers className="h-4 w-4 text-primary" />
+                          <span className="text-muted-foreground">Make Flashcards</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm">
+                          <Brain className="h-4 w-4 text-primary" />
+                          <span className="text-muted-foreground">Take Quizzes</span>
+                        </div>
+                      </div>
+                      <Link href="/library" className="inline-block mt-2">
+                        <Button variant="link" size="sm" className="h-auto p-0 text-primary">
+                          Go to My Library →
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </SignedIn>
         </div>
       </main>
 
       {/* Pricing Section */}
       <PricingSection />
+
+      {/* Upgrade Modal */}
+      <Dialog open={showUpgradeModal} onOpenChange={setShowUpgradeModal}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {upgradeModalType === 'limit' ? 'Daily Limit Reached' : 'Premium Feature'}
+            </DialogTitle>
+            <DialogDescription>
+              {upgradeModalType === 'limit' 
+                ? "You've used all 5 free searches today. Upgrade to Pro for unlimited searches and access to advanced features!"
+                : "University and PhD level explanations are available for Pro members. Upgrade to unlock advanced learning features!"
+              }
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <p className="text-sm text-muted-foreground">
+              With Pro, you'll get:
+            </p>
+            <ul className="mt-2 space-y-2 text-sm">
+              <li className="flex items-center gap-2">
+                <span className="text-primary">✓</span>
+                <span>Unlimited daily searches</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="text-primary">✓</span>
+                <span>University & PhD level explanations</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="text-primary">✓</span>
+                <span>Flashcard generation</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <span className="text-primary">✓</span>
+                <span>Interactive quizzes</span>
+              </li>
+            </ul>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowUpgradeModal(false)}>
+              Maybe Later
+            </Button>
+            <Button
+              className="bg-gradient-to-r from-primary to-secondary text-primary-foreground hover:opacity-90"
+              onClick={() => {
+                setShowUpgradeModal(false)
+                // Scroll to pricing section
+                document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' })
+              }}
+            >
+              Upgrade to Pro
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

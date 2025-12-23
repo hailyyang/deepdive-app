@@ -2,8 +2,11 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Heart, Layers, Brain, Loader2 } from "lucide-react"
-import { useState } from "react"
+import { Heart, Loader2 } from "lucide-react"
+import { useState, useEffect } from "react"
+import { useUser, SignInButton } from "@clerk/nextjs"
+import { toast } from "sonner"
+import { checkIfSaved, unsaveItem } from "@/app/actions/library"
 
 interface ResultCardProps {
   title: string
@@ -12,10 +15,111 @@ interface ResultCardProps {
   keyTerms: string[]
   isVisible: boolean
   isLoading?: boolean
+  topic?: string
+  level?: number
 }
 
-export function ResultCard({ title, content, analogy, keyTerms, isVisible, isLoading = false }: ResultCardProps) {
+export function ResultCard({ 
+  title, 
+  content, 
+  analogy, 
+  keyTerms, 
+  isVisible, 
+  isLoading = false,
+  topic = "",
+  level = 0
+}: ResultCardProps) {
   const [isSaved, setIsSaved] = useState(false)
+  const [savedItemId, setSavedItemId] = useState<string | undefined>()
+  const [isSaving, setIsSaving] = useState(false)
+  const { isSignedIn, user } = useUser()
+
+  // Check if item is already saved when component mounts or when topic/level changes
+  useEffect(() => {
+    if (isSignedIn && topic && content) {
+      checkIfSaved(topic, level).then((result) => {
+        setIsSaved(result.saved)
+        setSavedItemId(result.itemId)
+      })
+    }
+  }, [isSignedIn, topic, level, content])
+
+  const handleSave = async () => {
+    if (!isSignedIn) {
+      // This will be handled by the SignInButton wrapper
+      return
+    }
+
+    if (!topic || !content) {
+      toast.error("Unable to save: Missing topic or content")
+      return
+    }
+
+    // If already saved, unsave it
+    if (isSaved && savedItemId) {
+      setIsSaving(true)
+      try {
+        const result = await unsaveItem(savedItemId)
+        if (result.success) {
+          setIsSaved(false)
+          setSavedItemId(undefined)
+          toast.success("Removed from library")
+        } else {
+          toast.error(result.error || 'Failed to remove item')
+        }
+      } catch (error) {
+        console.error('Error unsaving item:', error)
+        toast.error('Failed to remove item')
+      } finally {
+        setIsSaving(false)
+      }
+      return
+    }
+
+    // Save the item
+    setIsSaving(true)
+
+    try {
+      const response = await fetch('/api/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          topic: topic,
+          level: level,
+          content: {
+            explanation: content,
+            analogy: analogy || '',
+            key_terms: keyTerms || [],
+          },
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        if (response.status === 409) {
+          // Already saved
+          setIsSaved(true)
+          toast.success("Already saved to library!")
+        } else {
+          throw new Error(data.error || 'Failed to save item')
+        }
+      } else {
+        setIsSaved(true)
+        toast.success("Saved to library!")
+        // Re-check to get the item ID
+        const checkResult = await checkIfSaved(topic, level)
+        setSavedItemId(checkResult.itemId)
+      }
+    } catch (error) {
+      console.error('Error saving item:', error)
+      toast.error(error instanceof Error ? error.message : 'Failed to save item')
+    } finally {
+      setIsSaving(false)
+    }
+  }
 
   if (!isVisible) {
     return (
@@ -75,18 +179,29 @@ export function ResultCard({ title, content, analogy, keyTerms, isVisible, isLoa
         )}
 
         <div className="flex items-center gap-2 border-t border-border pt-4">
-          <Button variant="outline" size="sm" className="gap-2 bg-transparent" onClick={() => setIsSaved(!isSaved)}>
-            <Heart className={`h-4 w-4 ${isSaved ? "fill-current text-red-500" : ""}`} />
-            {isSaved ? "Saved" : "Save"}
-          </Button>
-          <Button variant="outline" size="sm" className="gap-2 bg-transparent">
-            <Layers className="h-4 w-4" />
-            Make Flashcard
-          </Button>
-          <Button variant="outline" size="sm" className="gap-2 bg-transparent">
-            <Brain className="h-4 w-4" />
-            Take Quiz
-          </Button>
+          {isSignedIn ? (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="gap-2 bg-transparent" 
+              onClick={handleSave}
+              disabled={isSaving}
+            >
+              <Heart className={`h-4 w-4 ${isSaved ? "fill-current text-red-500" : ""}`} />
+              {isSaving ? (isSaved ? "Removing..." : "Saving...") : isSaved ? "Saved" : "Save to Library"}
+            </Button>
+          ) : (
+            <SignInButton mode="modal">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="gap-2 bg-transparent"
+              >
+                <Heart className="h-4 w-4" />
+                Save to Library
+              </Button>
+            </SignInButton>
+          )}
         </div>
       </CardContent>
     </Card>

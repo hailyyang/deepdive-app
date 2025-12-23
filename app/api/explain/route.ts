@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { createServerClient } from '@/lib/supabase'
+import { auth } from '@clerk/nextjs/server'
 
 const geminiApiKey = process.env.GEMINI_API_KEY
 if (!geminiApiKey) {
@@ -20,11 +21,62 @@ interface ExplanationResponse {
   key_terms: string[]
 }
 
+const ADMIN_ID = 'user_37GIjuBW1YNC0bLc2U3J3bdOq6z'
+
 const LEVEL_NAMES: Record<number, string> = {
   0: 'child',
   1: 'high school student',
   2: 'college student',
   3: 'PhD student',
+}
+
+// Helper function to increment usage count
+async function incrementUsageCount(userId: string, supabase: ReturnType<typeof createServerClient>) {
+  const today = new Date().toISOString().split('T')[0]
+
+  // Fetch current usage
+  const { data: usageData } = await supabase
+    .from('user_usage')
+    .select('*')
+    .eq('user_id', userId)
+    .single()
+
+  if (usageData) {
+    const lastUpdated = usageData.last_updated
+      ? new Date(usageData.last_updated).toISOString().split('T')[0]
+      : null
+
+    if (lastUpdated !== today) {
+      // Reset for new day
+      await supabase
+        .from('user_usage')
+        .upsert({
+          user_id: userId,
+          count: 1,
+          last_updated: today,
+        }, {
+          onConflict: 'user_id',
+        })
+    } else {
+      // Increment existing count
+      await supabase
+        .from('user_usage')
+        .update({
+          count: (usageData.count || 0) + 1,
+          last_updated: today,
+        })
+        .eq('user_id', userId)
+    }
+  } else {
+    // Create new record
+    await supabase
+      .from('user_usage')
+      .insert({
+        user_id: userId,
+        count: 1,
+        last_updated: today,
+      })
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -39,15 +91,61 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Get current user ID
+    const { userId } = await auth()
+
+    // Create server-side Supabase client with service role to bypass RLS
+    const supabase = createServerClient(true)
+
+    // Check rate limit if user is authenticated
+    if (userId) {
+      const today = new Date().toISOString().split('T')[0] // YYYY-MM-DD format
+
+      // Fetch user's usage record
+      const { data: usageData, error: usageError } = await supabase
+        .from('user_usage')
+        .select('*')
+        .eq('user_id', userId)
+        .single()
+
+      if (usageError && usageError.code !== 'PGRST116') {
+        // PGRST116 is "not found" error, which is expected for new users
+        console.error('Error fetching user usage:', usageError)
+      }
+
+      let currentCount = 0
+
+      if (usageData) {
+        const lastUpdated = usageData.last_updated
+          ? new Date(usageData.last_updated).toISOString().split('T')[0]
+          : null
+
+        // Check if we need to reset (new day)
+        if (lastUpdated !== today) {
+          currentCount = 0
+        } else {
+          currentCount = usageData.count || 0
+        }
+      }
+
+      // Check if limit reached (skip for admin)
+      if (userId !== ADMIN_ID && currentCount >= 5) {
+        return NextResponse.json(
+          { error: 'Daily limit reached. You have used all 5 free searches today. Please upgrade to continue.', limitReached: true },
+          { status: 429 }
+        )
+      }
+    }
+
     const topicLower = topic.toLowerCase().trim()
     const levelName = LEVEL_NAMES[level] || 'general audience'
     const levelString = String(level) // Convert level to string for database
 
-    // Create server-side Supabase client
-    const supabase = createServerClient()
+    // Create regular Supabase client for cache check
+    const supabaseCache = createServerClient()
 
     // Check cache first
-    const { data: cachedData, error: cacheError } = await supabase
+    const { data: cachedData, error: cacheError } = await supabaseCache
       .from('cached_explanations')
       .select('*')
       .eq('topic', topicLower)
@@ -56,6 +154,12 @@ export async function POST(request: NextRequest) {
 
     if (cachedData && !cacheError && cachedData.content) {
       const content = cachedData.content as ExplanationResponse
+      
+      // Increment usage count for cache hit (if user is authenticated)
+      if (userId) {
+        await incrementUsageCount(userId, supabase)
+      }
+      
       return NextResponse.json({
         explanation: content.explanation,
         analogy: content.analogy,
@@ -132,7 +236,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Save to Supabase - wrap everything in content field
-    const { error: insertError } = await supabase
+    const { error: insertError } = await supabaseCache
       .from('cached_explanations')
       .insert({
         topic: topicLower,
@@ -147,6 +251,11 @@ export async function POST(request: NextRequest) {
     if (insertError) {
       console.error('Error saving to Supabase:', insertError)
       // Continue anyway - return the result even if save fails
+    }
+
+    // Increment usage count for Gemini call (if user is authenticated)
+    if (userId) {
+      await incrementUsageCount(userId, supabase)
     }
 
     return NextResponse.json({

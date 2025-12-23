@@ -10,7 +10,7 @@ const PLANS = [
     features: [
       "Basic Explanations",
       "5-year-olds - High School levels",
-      "Limited to 10 searches/day",
+      "Limited to 5 searches/day",
       "Save favorite explanations",
     ],
     buttonText: "Get Started",
@@ -37,7 +37,7 @@ const PLANS = [
 
 export function PricingSection() {
   return (
-    <section className="w-full border-t border-border bg-muted/30 py-20">
+    <section id="pricing" className="w-full border-t border-border bg-muted/30 py-20">
       <div className="container mx-auto max-w-4xl px-4 md:px-6">
         <div className="mx-auto max-w-3xl text-center">
           <h2 className="text-balance text-3xl font-bold tracking-tight md:text-4xl">Choose Your Learning Path</h2>

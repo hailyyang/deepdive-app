@@ -12,10 +12,22 @@ const LEVELS = [
 interface LevelSliderProps {
   value: number
   onChange: (value: number) => void
+  isPro?: boolean
+  onPremiumLevelClick?: () => void
 }
 
-export function LevelSlider({ value, onChange }: LevelSliderProps) {
+export function LevelSlider({ value, onChange, isPro = false, onPremiumLevelClick }: LevelSliderProps) {
   const currentLevel = LEVELS[value]
+
+  const handleLevelChange = (newValue: number) => {
+    const targetLevel = LEVELS[newValue]
+    // If trying to access premium level and user is not pro, show upgrade modal
+    if (targetLevel.premium && !isPro && onPremiumLevelClick) {
+      onPremiumLevelClick()
+      return
+    }
+    onChange(newValue)
+  }
 
   return (
     <div className="w-full space-y-4">
@@ -33,7 +45,7 @@ export function LevelSlider({ value, onChange }: LevelSliderProps) {
       <div className="relative">
         <Slider
           value={[value]}
-          onValueChange={([newValue]) => onChange(newValue)}
+          onValueChange={([newValue]) => handleLevelChange(newValue)}
           max={3}
           step={1}
           className="w-full"
@@ -42,10 +54,10 @@ export function LevelSlider({ value, onChange }: LevelSliderProps) {
           {LEVELS.map((level, index) => (
             <button
               key={level.value}
-              onClick={() => onChange(index)}
+              onClick={() => handleLevelChange(index)}
               className={`flex flex-col items-center gap-1 transition-opacity ${
                 value === index ? "opacity-100" : "opacity-40 hover:opacity-70"
-              }`}
+              } ${level.premium && !isPro ? "cursor-not-allowed" : "cursor-pointer"}`}
             >
               <span className="text-xs font-medium">{level.label}</span>
               {level.premium && <Lock className="h-3 w-3 text-secondary" />}
